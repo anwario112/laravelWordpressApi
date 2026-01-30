@@ -2,7 +2,7 @@ name: Transfer Data Daily
 
 on:
   schedule:
-    - cron: '12 12 * * *'  # 12:00 UTC = 2:00 PM Lebanon (UTC+2)
+    - cron: '30 12 * * *'  # 12:00 UTC = 2:00 PM Lebanon (UTC+2)
   workflow_dispatch:
 
 jobs:
