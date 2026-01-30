@@ -1,17 +1,26 @@
 name: Transfer Data Daily
 
-# Trigger every day at 2:00 PM Lebanon time
 on:
   schedule:
-    - cron: '10 12 * * *'   
-  workflow_dispatch:        # allows manual trigger
+    - cron: '12 12 * * *'  # 12:00 UTC = 2:00 PM Lebanon (UTC+2)
+  workflow_dispatch:
 
 jobs:
   call_api:
     runs-on: ubuntu-latest
-
     steps:
       - name: Call Laravel API
         run: |
-          curl -X POST "https://laravelwordpressapi.onrender.com/api/transferData" \
-          -H "X-API-KEY: ${{ secrets.SCHEDULER_KEY }}"
+          response=$(curl -s -w "\n%{http_code}" -X POST "https://laravelwordpressapi.onrender.com/api/transferData" \
+            -H "X-API-KEY: ${{ secrets.SCHEDULER_KEY }}")
+          
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          
+          echo "Response: $body"
+          echo "Status Code: $http_code"
+          
+          if [ "$http_code" -ne 200 ]; then
+            echo "API call failed with status $http_code"
+            exit 1
+          fi
