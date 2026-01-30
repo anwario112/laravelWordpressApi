@@ -26,13 +26,6 @@ Route::post('OrderService',[OrderService::class,'OrderDetails']);
 
 
 //scheduled job
-// Route::post('transferData',[SimpleProducts::class,'transferData']);
-Route::post('transferData', function (Illuminate\Http\Request $request) {
+ Route::post('transferData',[SimpleProducts::class,'transferData']);
 
-    if ($request->header('X-API-KEY') !== env('SCHEDULER_KEY')) {
-        return response()->json(['error' => 'Unauthorized'], 401);
-    }
-
-    return app(\App\Http\Controllers\SimpleProducts::class)->transferData($request);
-});
 
