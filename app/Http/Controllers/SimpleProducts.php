@@ -52,11 +52,14 @@ class SimpleProducts extends Controller
     $db = DB::connection($connectionName); 
 
     try {
+        // set_time_limit(0);          
+        // ini_set('max_execution_time', '0');
         DB::connection($connectionName)->beginTransaction();
-
+           
+       try{
         $this->processTaxonomies($connectionName);
 
-        // ✅ Fetch all existing products in one query
+        //  Fetch all existing products in one query
         $existingProducts = $db->table('wp_posts as p')
             ->join('wp_postmeta as pm', fn($join) => $join->on('p.ID', '=', 'pm.post_id')->where('pm.meta_key', '_sku'))
             ->where('p.post_type', 'product')
@@ -64,13 +67,14 @@ class SimpleProducts extends Controller
             ->pluck('p.ID', 'pm.meta_value')
             ->toArray();
 
-        // ✅ Fetch all products once
+        // Fetch all products once
         $products = $db->table('custom_data')
             ->whereNotNull('sku')->where('sku', '!=', '')
             ->whereNotNull('name')
             ->get();
 
-        // Pre-fetch all taxonomy term mappings for bulk operations
+        $ProductsProcessed=$products->count();
+        
         $categoryTerms = $this->getTaxonomyTermMapping($connectionName, 'product_cat');
         $brandTerms = $this->getTaxonomyTermMapping($connectionName, 'brand');
 
@@ -79,6 +83,9 @@ class SimpleProducts extends Controller
         $postsToUpdate = [];
         $postmetaToInsert = [];
         $termRelationshipsToInsert = [];
+        $productsToCleanup = []; // Track products for taxonomy cleanup
+        $updatedProductIds = []; // Track product IDs being updated (to delete their meta)
+        $processedProductIds = []; // Track product IDs for WooCommerce hooks
         $now = now();
         $nowGmt = now();
 
@@ -100,9 +107,13 @@ class SimpleProducts extends Controller
                         'post_modified_gmt' => $nowGmt,
                     ];
                     
+                    // Track product ID for hooks and meta updates
+                    $processedProductIds[] = $postId;
+                    $updatedProductIds[] = $postId;
+                    
                     // Prepare meta and taxonomy for existing products
                     $this->prepareProductMeta($postId, $product, $postmetaToInsert);
-                    $this->prepareTaxonomyRelationships($postId, $product, $categoryTerms, $brandTerms, $termRelationshipsToInsert);
+                   $this->prepareTaxonomyRelationshipsWithCleanup($postId, $product, $categoryTerms, $brandTerms, $termRelationshipsToInsert, $productsToCleanup);
                 } else {
                     $postsToInsert[] = [
                         'post_author' => 1,
@@ -122,46 +133,64 @@ class SimpleProducts extends Controller
                         'post_content_filtered' => '',
                         'post_modified' => $now,
                         'post_modified_gmt' => $nowGmt,
-                        '_sku' => $sku, // Temporary key for later processing
-                        '_product' => $product, // Store product data for later
+                        '_sku' => $sku, 
+                        '_product' => $product, 
                     ];
                 }
             }
 
             // Bulk insert new posts and prepare their meta/taxonomy
             if (!empty($postsToInsert)) {
-                $this->bulkInsertPosts($connectionName, $postsToInsert, $existingProducts, $postmetaToInsert, $termRelationshipsToInsert, $categoryTerms, $brandTerms);
-                $postsToInsert = []; // Clear for next batch
+                $newProductIds = $this->bulkInsertPosts($connectionName, $postsToInsert, $existingProducts, $postmetaToInsert, $termRelationshipsToInsert, $categoryTerms, $brandTerms);
+                $processedProductIds = array_merge($processedProductIds, $newProductIds);
+                $postsToInsert = []; 
             }
 
             // Bulk update existing posts
             if (!empty($postsToUpdate)) {
                 $this->bulkUpdatePosts($connectionName, $postsToUpdate);
-                $postsToUpdate = []; // Clear for next batch
+                $postsToUpdate = []; 
             }
         }
 
-        // Bulk insert all postmeta
+        // Delete existing meta for updated products first 
+        if (!empty($updatedProductIds)) {
+            $this->bulkDeleteProductMeta($connectionName, array_unique($updatedProductIds));
+        }
+        
+        // Bulk insert all postmeta 
         if (!empty($postmetaToInsert)) {
             $this->bulkInsertPostmeta($connectionName, $postmetaToInsert);
         }
-
-        // Bulk insert all taxonomy relationships
+        
+        $this->bulkCleanupChangedTaxonomies($productsToCleanup, $connectionName);
+        
         if (!empty($termRelationshipsToInsert)) {
             $this->bulkInsertTermRelationships($connectionName, $termRelationshipsToInsert);
         }
 
         $this->updateTermCounts($connectionName);
         $this->processProductImages($connectionName);
-        $this->clearWordPressCache($connectionName);
         // $this->cleanupCustomData($connectionName);
 
         DB::connection($connectionName)->commit();
+        $this->deleteDraftCheckoutOrders($connectionName);
+        
+        
         Log::info('WooCommerce products processed successfully with bulk operations.');
-        return response()->json(['message' => 'Data transferred successfully to WooCommerce products.']);
+       return response()->json([
+            'message' => 'The transfer is successful',
+            'productsProcessed' => $ProductsProcessed
+        ], 200);
+    }catch (\Throwable $e) {                       
+            \Log::error('transferData fatal error', [
+                'msg'   => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;                                  
+        }
     } catch (\Exception $e) {
         DB::connection($connectionName)->rollBack();
-        Log::error('Error in transferData: ' . $e->getMessage());
         return response()->json(['error' => 'An error occurred while transferring data.'], 500);
     }
 }
@@ -296,8 +325,9 @@ private function getTaxonomyTermMapping($connectionName, $taxonomy)
 private function bulkInsertPosts($connectionName, &$postsToInsert, &$existingProducts, &$postmetaToInsert, &$termRelationshipsToInsert, $categoryTerms, $brandTerms)
 {
     $db = DB::connection($connectionName);
+    $newProductIds = [];
     
-    // Process in chunks to avoid memory issues
+   
     foreach (array_chunk($postsToInsert, 200) as $chunk) {
         $skus = [];
         $products = [];
@@ -321,6 +351,7 @@ private function bulkInsertPosts($connectionName, &$postsToInsert, &$existingPro
         
         foreach ($cleanedChunk as $index => $post) {
             $postId = $db->table('wp_posts')->insertGetId($post);
+            $newProductIds[] = $postId;
             
             if (isset($skus[$index])) {
                 $postmetaSkus[] = [
@@ -338,11 +369,13 @@ private function bulkInsertPosts($connectionName, &$postsToInsert, &$existingPro
             }
         }
         
-        // Bulk insert SKU meta
+       
         if (!empty($postmetaSkus)) {
             $db->table('wp_postmeta')->insert($postmetaSkus);
         }
     }
+    
+    return $newProductIds;
 }
 
 private function bulkUpdatePosts($connectionName, $postsToUpdate)
@@ -354,7 +387,7 @@ private function bulkUpdatePosts($connectionName, $postsToUpdate)
     $now = now();
     $nowGmt = now();
     
-    // Process in chunks to avoid query size limits
+    
     foreach (array_chunk($postsToUpdate, 100, true) as $chunk) {
         $ids = array_keys($chunk);
         
@@ -394,6 +427,8 @@ private function prepareProductMeta($postId, $product, &$postmetaToInsert)
         '_backorders' => 'no',
         '_sold_individually' => 'no'
     ];
+    
+
 
     foreach ($metaData as $key => $value) {
         if ($value !== null) {
@@ -406,13 +441,48 @@ private function prepareProductMeta($postId, $product, &$postmetaToInsert)
     }
 }
 
+/**
+ * Delete existing product meta for updated products
+ * This prevents duplicates when inserting new meta values
+ */
+private function bulkDeleteProductMeta($connectionName, $productIds)
+{
+    $db = DB::connection($connectionName);
+    
+    if (empty($productIds)) {
+        return;
+    }
+    
+    // Meta keys that need to be updated (price, stock, etc.)
+    $metaKeysToDelete = [
+        '_price',
+        '_regular_price',
+        '_sale_price',
+        '_stock',
+        '_stock_status',
+        '_visibility',
+        '_manage_stock',
+        '_backorders',
+        '_sold_individually',
+    ];
+    
+    // Delete existing meta for updated products in batches
+    foreach (array_chunk($productIds, 500) as $chunk) {
+        $db->table('wp_postmeta')
+            ->whereIn('post_id', $chunk)
+            ->whereIn('meta_key', $metaKeysToDelete)
+            ->delete();
+    }
+    
+    Log::info('✅ Deleted existing meta for ' . count($productIds) . ' updated products to prevent duplicates');
+}
+
 private function bulkInsertPostmeta($connectionName, $postmetaToInsert)
 {
     $db = DB::connection($connectionName);
     
-    //
+    // Simple INSERT - duplicates already prevented by deleting meta for updated products
     foreach (array_chunk($postmetaToInsert, 500) as $chunk) {
-       
         $values = [];
         $params = [];
         
@@ -424,8 +494,7 @@ private function bulkInsertPostmeta($connectionName, $postmetaToInsert)
         }
         
         $sql = "INSERT INTO wp_postmeta (post_id, meta_key, meta_value) VALUES " . 
-               implode(', ', $values) . 
-               " ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)";
+               implode(', ', $values);
         
         $db->statement($sql, $params);
     }
@@ -520,8 +589,7 @@ private function updateProductMeta($connectionName, $postId, $product)
 
 private function linkProductToTaxonomies($connectionName, $postId, $sku)
 {
-    // This method is kept for backward compatibility but is no longer used in the main flow
-    // The main flow now uses prepareTaxonomyRelationships + bulkInsertTermRelationships
+   
     $productData = DB::connection($connectionName)
         ->table('custom_data')
         ->where('sku', $sku)
@@ -612,96 +680,7 @@ private function updateTermCounts($connectionName)
 
 
 
-// private function processProductImages($connectionName)
-// {
-//     $db = DB::connection($connectionName);
-//     $batchSize = 100;
-//     $offset = 0;
-//     $totalProcessed = 0;
 
-//     Log::info("🖼️ Image Processing Started");
-
-//     do {
-//         $batchStart = microtime(true);
-        
-//         // Get products with images from custom_data
-//         $products = $db->table('custom_data')
-//             ->select('sku', 'images')
-//             ->whereNotNull('images')
-//             ->where('images', '!=', '')
-//             ->whereNotIn('images', ['[]', 'null', '""'])
-//             ->offset($offset)->limit($batchSize)->get();
-
-//         if ($products->isEmpty()) break;
-
-//         // Extract all SKUs from products (these are the image basenames)
-//         $skus = $products->pluck('sku')->filter()->unique()->toArray();
-        
-//         if (empty($skus)) {
-//             $offset += $batchSize;
-//             continue;
-//         }
-
-//         // Directly match SKUs to WordPress products - no slug conversion needed!
-//         $wpProducts = $db->table('wp_posts as p')
-//             ->join('wp_postmeta as pm', fn($join) => $join->on('p.ID', '=', 'pm.post_id')->where('pm.meta_key', '_sku'))
-//             ->whereIn('pm.meta_value', $skus)
-//             ->where('p.post_type', 'product')
-//             ->where('p.post_status', 'publish')
-//             ->pluck('p.ID', 'pm.meta_value')
-//             ->toArray();
-
-//         // Collect all image basenames from all products for pre-fetching attachments
-//         $allImageBasenames = [];
-//         foreach ($products as $product) {
-//             $images = json_decode($product->images, true);
-//             if (is_array($images)) {
-//                 foreach ($images as $url) {
-//                     if (is_string($url)) {
-//                         $basename = pathinfo(basename($url), PATHINFO_FILENAME);
-//                         $allImageBasenames[] = strtolower(str_replace('.', '-', $basename));
-//                     }
-//                 }
-//             }
-//         }
-
-//         // Pre-fetch existing attachments by normalized post_name
-//         $existingAttachments = [];
-//         if (!empty($allImageBasenames)) {
-//             $existingAttachments = $db->table('wp_posts')
-//                 ->whereIn('post_name', array_unique($allImageBasenames))
-//                 ->where('post_type', 'attachment')
-//                 ->pluck('ID', 'post_name')
-//                 ->toArray();
-//         }
-
-//         // Process each product: match directly by SKU (which equals image basename)
-//         foreach ($products as $product) {
-//             $images = json_decode($product->images, true);
-//             if (!is_array($images)) continue;
-
-//             // Direct match: product SKU = image basename, so use SKU directly
-//             if (!isset($wpProducts[$product->sku])) continue;
-
-//             $this->processProductImagesBatch(
-//                 $images, 
-//                 $wpProducts[$product->sku], 
-//                 $product, 
-//                 $existingAttachments, 
-//                 $connectionName
-//             );
-//             $totalProcessed++;
-//         }
-
-//         $batchEnd = microtime(true);
-//         $batchTime = round($batchEnd - $batchStart, 2);
-//         Log::info("✅ Batch completed | Offset: {$offset} | Time: {$batchTime}s | Products: " . count($products));
-
-//         $offset += $batchSize;
-//     } while (true);
-
-//     Log::info("🖼️ Image Processing Completed | Total Products: {$totalProcessed}");
-// }
 
 private function processProductImages($connectionName)
 {
@@ -1171,9 +1150,9 @@ private function processProductImagesBatch($images, $wpProductId, $product, &$ex
                 'to_ping' => '',
                 'pinged' => '',
                 'post_content_filtered' => '',
-                '_filename' => $filename, // Temporary key for metadata
-                '_fixedUrl' => $fixedImageUrl, // Temporary key
-                '_postName' => $postName // Temporary key
+                '_filename' => $filename, 
+                '_fixedUrl' => $fixedImageUrl, 
+                '_postName' => $postName 
             ];
         } else {
             // Prepare for bulk update
@@ -1272,7 +1251,7 @@ private function processProductImagesBatch($images, $wpProductId, $product, &$ex
         }
     }
 
-    // === BULK UPDATE EXISTING ATTACHMENTS ===
+    // BULK UPDATE EXISTING ATTACHMENTS
     if (!empty($postsToUpdate)) {
         foreach ($postsToUpdate as $attachmentId => $updateData) {
             $db->table('wp_posts')->where('ID', $attachmentId)->update($updateData);
@@ -1322,7 +1301,7 @@ private function processProductImagesBatch($images, $wpProductId, $product, &$ex
         }
     }
 
-    // === BULK INSERT ALL POSTMETA ===
+    //  BULK INSERT ALL POSTMETA 
     if (!empty($postmetaToInsert)) {
         // Chunk to avoid max packet size issues
         foreach (array_chunk($postmetaToInsert, 500) as $chunk) {
@@ -1337,60 +1316,20 @@ private function processProductImagesBatch($images, $wpProductId, $product, &$ex
 }
 
 
-// private function addFixedUrlAttachmentMetadata($attachmentId, $filename, $fixedImageUrl, $imageInfo, $connectionName)
-// {
-   
-//     DB::connection($connectionName)
-//       ->table('wp_postmeta')
-//       ->insert([
-//           'post_id' => $attachmentId,
-//           'meta_key' => '_wp_attached_file',
-//           'meta_value' => $filename
-//       ]);
 
-    
-//     $metadata = serialize([
-//         'width' => 800,  
-//         'height' => 800, 
-//         'file' => $filename,
-//         'sizes' => [],
-//         'image_meta' => [
-//             'aperture' => '0',
-//             'credit' => '',
-//             'camera' => '',
-//             'caption' => '',
-//             'created_timestamp' => '0',
-//             'copyright' => '',
-//             'focal_length' => '0',
-//             'iso' => '0',
-//             'shutter_speed' => '0',
-//             'title' => '',
-//             'orientation' => '0',
-//             'keywords' => []
-//         ]
-//     ]);
-
-//     DB::connection($connectionName)
-//       ->table('wp_postmeta')
-//       ->insert([
-//           'post_id' => $attachmentId,
-//           'meta_key' => '_wp_attachment_metadata',
-//           'meta_value' => $metadata
-//       ]);
-// }
 
 private function addFixedUrlAttachmentMetadata($attachmentId, $filename, $fixedImageUrl, $imageInfo, $connectionName)
 {
     $db = DB::connection($connectionName);
     
-    // Add attached file metadata
+   
     $db->table('wp_postmeta')->insert([
         'post_id' => $attachmentId,
         'meta_key' => '_wp_attached_file',
         'meta_value' => $filename
     ]);
 
-    // Add attachment metadata
+  
     $metadata = serialize([
         'width' => $imageInfo['width'] ?? 800,
         'height' => $imageInfo['height'] ?? 800,
@@ -1420,7 +1359,7 @@ private function addFixedUrlAttachmentMetadata($attachmentId, $filename, $fixedI
 }
 private function addExternalAttachmentMetadata($attachmentId, $filename, $imageUrl, $imageInfo, $connectionName)
 {
-    // Add attached file metadata
+   
     DB::connection($connectionName)
       ->table('wp_postmeta')
       ->insert([
@@ -1429,7 +1368,7 @@ private function addExternalAttachmentMetadata($attachmentId, $filename, $imageU
           'meta_value' => $imageUrl 
       ]);
 
-    // Add attachment metadata
+   
     $metadata = serialize([
         'width' => $imageInfo['width'] ?? 0,
         'height' => $imageInfo['height'] ?? 0,
@@ -1459,19 +1398,7 @@ private function addExternalAttachmentMetadata($attachmentId, $filename, $imageU
           'meta_value' => $metadata
       ]);
 }
-// private function isPrimaryImage($basename, $sku)
-// {
-//     $cleanBasename = strtolower(trim($basename));
-//     $cleanSku = strtolower(trim($sku));
-   
-//     return $cleanBasename === $cleanSku;
-//     // return (
-//     //     $cleanBasename === $cleanSku ||       
-//     //     preg_match('/[-_]main$/', $cleanBasename) ||
-//     //     preg_match('/[-_]primary$/', $cleanBasename) ||
-//     //     (!preg_match('/[-_]\d+$/', $cleanBasename) && strpos($cleanBasename, $cleanSku) === 0)
-//     // );
-// }
+
 
 private function isPrimaryImage($basename, $sku)
 {
@@ -1480,25 +1407,7 @@ private function isPrimaryImage($basename, $sku)
     return $cleanBasename === $cleanSku;
 }
 
-// private function updateProductGallery($wpProductId, $newGalleryIds, $connectionName)
-// {
-//     $existingGallery = DB::connection($connectionName)
-//         ->table('wp_postmeta')
-//         ->where('post_id', $wpProductId)
-//         ->where('meta_key', '_product_image_gallery')
-//         ->first();
 
-//     $existingIds = $existingGallery ? array_filter(explode(',', $existingGallery->meta_value)) : [];
-//     $allIds = array_unique(array_merge($existingIds, $newGalleryIds));
-//     $newGalleryValue = implode(',', $allIds);
-
-//     DB::connection($connectionName)
-//         ->table('wp_postmeta')
-//         ->updateOrInsert(
-//             ['post_id' => $wpProductId, 'meta_key' => '_product_image_gallery'],
-//             ['meta_value' => $newGalleryValue]
-//         );
-// }
 
 private function updateProductGallery($wpProductId, $newGalleryIds, $connectionName)
 {
@@ -1519,23 +1428,6 @@ private function updateProductGallery($wpProductId, $newGalleryIds, $connectionN
     );
 }
 
-// private function getMimeType($filename)
-// {
-//      $extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-    
-//     $mimeTypes = [
-//         'jpg' => 'image/jpeg',
-//         'jpeg' => 'image/jpeg',
-//         'png' => 'image/png',
-//         'gif' => 'image/gif',
-//         'bmp' => 'image/bmp',
-//         'webp' => 'image/webp',
-//         'svg' => 'image/svg+xml'
-//     ];
-    
-//     return $mimeTypes[$extension] ?? 'image/jpeg';
-// }
-
 private function getMimeType($filename)
 {
     $extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
@@ -1554,10 +1446,10 @@ private function getMimeType($filename)
 }
 
 
-// method to add attachment metadata
+
 private function addAttachmentMetadata($attachmentId, $filename, $imageInfo, $connectionName)
 {
-    // Add attached file metadata
+   
     DB::connection($connectionName)
       ->table('wp_postmeta')
       ->insert([
@@ -1566,7 +1458,7 @@ private function addAttachmentMetadata($attachmentId, $filename, $imageInfo, $co
           'meta_value' => $filename
       ]);
 
-    // Add attachment metadata
+   
     $metadata = serialize([
         'width' => $imageInfo['width'],
         'height' => $imageInfo['height'],
@@ -1597,22 +1489,7 @@ private function addAttachmentMetadata($attachmentId, $filename, $imageInfo, $co
       ]);
 }
 
-private function clearWordPressCache($connectionName)
-{
-    $db = DB::connection($connectionName);
-    
-    $count = $db->table('wp_options')
-                ->where('option_name', 'LIKE', '%_transient_%')
-                ->count();
-    
-    Log::info("Clearing {$count} transient cache entries");
-    
-    $db->table('wp_options')
-       ->where('option_name', 'LIKE', '%_transient_%')
-       ->delete();
-    
-    Log::info('Cache cleared successfully');
-}
+
 private function cleanupCustomData($connectionName)
 {
     try {
@@ -1642,5 +1519,118 @@ private function cleanupCustomData($connectionName)
 }
 
 
-}
+private function deleteDraftCheckoutOrders($connectionName)
+{
+    $db = DB::connection($connectionName);
     
+    try {
+        Log::info('🗑️ Starting deletion of draft checkout orders...');
+        
+        $deleted = $db->table('wp_wc_orders')
+            ->where('status', 'wc-checkout-draft')
+            ->where('customer_id',0)
+            ->delete();
+        
+        Log::info("✅ Deleted {$deleted} draft checkout orders");
+        
+        return $deleted;
+        
+    } catch (\Exception $e) {
+        Log::error('❌ Error deleting draft checkout orders: ' . $e->getMessage());
+        throw $e;
+    }
+}
+
+private function prepareTaxonomyRelationshipsWithCleanup($postId, $product, $categoryTerms, $brandTerms, &$termRelationshipsToInsert, &$productsToCleanup)
+{
+    // Build new taxonomy IDs for this product
+    $newTaxonomyIds = [];
+    
+    // Category
+    if (!empty($product->category) && isset($categoryTerms[$product->category])) {
+        $newTaxonomyIds[] = $categoryTerms[$product->category];
+        $termRelationshipsToInsert[] = [
+            'object_id' => $postId,
+            'term_taxonomy_id' => $categoryTerms[$product->category],
+        ];
+    }
+    
+    // Subcategory
+    if (!empty($product->subcategory) && isset($categoryTerms[$product->subcategory])) {
+        $newTaxonomyIds[] = $categoryTerms[$product->subcategory];
+        $termRelationshipsToInsert[] = [
+            'object_id' => $postId,
+            'term_taxonomy_id' => $categoryTerms[$product->subcategory],
+        ];
+    }
+    
+    // Brand
+    if (!empty($product->brand) && isset($brandTerms[$product->brand])) {
+        $newTaxonomyIds[] = $brandTerms[$product->brand];
+        $termRelationshipsToInsert[] = [
+            'object_id' => $postId,
+            'term_taxonomy_id' => $brandTerms[$product->brand],
+        ];
+    }
+    
+    // Store for later bulk comparison
+    $productsToCleanup[$postId] = $newTaxonomyIds;
+}
+
+private function bulkCleanupChangedTaxonomies($productsToCleanup, $connectionName)
+{
+    if (empty($productsToCleanup)) return;
+    
+    $db = DB::connection($connectionName);
+    $productIds = array_keys($productsToCleanup);
+    
+    // Fetch ALL current relationships for these products in ONE query
+    $currentRelationships = $db->table('wp_term_relationships as tr')
+        ->join('wp_term_taxonomy as tt', 'tr.term_taxonomy_id', '=', 'tt.term_taxonomy_id')
+        ->whereIn('tr.object_id', $productIds)
+        ->whereIn('tt.taxonomy', ['product_cat', 'brand'])
+        ->select('tr.object_id', 'tr.term_taxonomy_id')
+        ->get()
+        ->groupBy('object_id');
+    
+    // Compare and find what needs deletion
+    $relationshipsToDelete = [];
+    
+    foreach ($productsToCleanup as $postId => $newTaxonomyIds) {
+        $currentTaxonomyIds = isset($currentRelationships[$postId]) 
+            ? $currentRelationships[$postId]->pluck('term_taxonomy_id')->toArray() 
+            : [];
+        
+        // Find old taxonomy IDs that are NOT in the new list
+        $toDelete = array_diff($currentTaxonomyIds, $newTaxonomyIds);
+        
+        if (!empty($toDelete)) {
+            foreach ($toDelete as $taxonomyId) {
+                $relationshipsToDelete[] = [
+                    'object_id' => $postId,
+                    'term_taxonomy_id' => $taxonomyId
+                ];
+            }
+        }
+    }
+    
+    // Bulk delete old relationships
+    if (!empty($relationshipsToDelete)) {
+        foreach (array_chunk($relationshipsToDelete, 500) as $chunk) {
+            $conditions = [];
+            foreach ($chunk as $rel) {
+                $conditions[] = "(object_id = {$rel['object_id']} AND term_taxonomy_id = {$rel['term_taxonomy_id']})";
+            }
+            
+            $db->statement("
+                DELETE FROM wp_term_relationships 
+                WHERE " . implode(' OR ', $conditions)
+            );
+        }
+        
+        Log::info("🗑️ Bulk deleted " . count($relationshipsToDelete) . " changed taxonomy relationships");
+    }
+}
+
+
+}

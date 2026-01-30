@@ -30,7 +30,7 @@ class TransferDataCommand extends Command
         $controller = new SimpleProducts();
         $request=new Request();
 
-        $request->headers->set('X-API-Key','DASHGSQYBODCVRYVNCXVOTYWMVJJCUNHGXOA');
+        $request->headers->set('X-API-Key','1FuXqlQASfaHEzUUgVHJ');
         $response=$controller->transferData($request);
 
         \Log::info('TransferDataCommand executed', ['response' => $response->getData()]);
