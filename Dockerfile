@@ -21,17 +21,16 @@ RUN apt-get update && apt-get install -y \
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Copy composer files first
-COPY composer.json composer.lock ./
+# Set Composer environment variables
+ENV COMPOSER_ALLOW_SUPERUSER=1
+ENV COMPOSER_NO_INTERACTION=1
 
-# Install PHP dependencies without scripts and without autoloader
-RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
-
-# Copy the rest of the application
+# Copy application files
 COPY . .
 
-# Generate optimized autoloader
-RUN composer dump-autoload --optimize --no-dev
+# Install PHP dependencies
+RUN composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist --no-progress 2>&1 || \
+    composer update --no-dev --optimize-autoloader --no-interaction --prefer-dist --no-progress 2>&1
 
 # Create .env file if it doesn't exist
 RUN if [ ! -f .env ]; then cp .env.example .env; fi
