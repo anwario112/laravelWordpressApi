@@ -2,16 +2,22 @@ name: Transfer Data Daily
 
 on:
   schedule:
-    - cron: '30 3 * * *'  # 12:00 UTC = 2:00 PM Lebanon (UTC+2)
+    - cron: '0 14 * * *'  # 14:00 UTC = 4:00 PM Lebanon (UTC+2)
   workflow_dispatch:
 
 jobs:
   call_api:
     runs-on: ubuntu-latest
     steps:
+      - name: Wake up Render service
+        run: |
+          echo "Waking up service..."
+          curl -s --max-time 60 https://laravelwordpressapi.onrender.com/ || true
+          sleep 10
+          
       - name: Call Laravel API
         run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST "https://laravelwordpressapi.onrender.com/api/transferData" \
+          response=$(curl -s -w "\n%{http_code}" --max-time 60 -X POST "https://laravelwordpressapi.onrender.com/api/transferData" \
             -H "X-API-KEY: ${{ secrets.SCHEDULER_KEY }}")
           
           http_code=$(echo "$response" | tail -n1)
