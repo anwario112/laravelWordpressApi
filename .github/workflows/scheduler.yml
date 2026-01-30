@@ -3,7 +3,7 @@ name: Transfer Data Daily
 # Trigger every day at 2:00 PM Lebanon time
 on:
   schedule:
-    - cron: '0 12 * * *'   # 12:00 UTC → 2:00 PM Lebanon
+    - cron: '10 12 * * *'   
   workflow_dispatch:        # allows manual trigger
 
 jobs:
