@@ -10,11 +10,12 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     nginx \
+    libzip-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Install PHP extensions
-RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd
+RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
 
 # Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -25,12 +26,21 @@ WORKDIR /var/www
 # Copy composer files
 COPY composer.json composer.lock* ./
 
-# Install dependencies with unlimited memory
-RUN COMPOSER_MEMORY_LIMIT=-1 composer install \
+# Install dependencies with verbose output and error handling
+RUN composer install \
     --no-dev \
-    --optimize-autoloader \
     --no-scripts \
-    --prefer-dist
+    --no-interaction \
+    --prefer-dist \
+    --optimize-autoloader \
+    --verbose \
+    || composer install \
+    --no-dev \
+    --no-scripts \
+    --no-interaction \
+    --prefer-dist \
+    --ignore-platform-reqs \
+    --verbose
 
 # Copy application files
 COPY . .
