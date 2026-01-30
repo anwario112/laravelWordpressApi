@@ -18,7 +18,7 @@ jobs:
       - name: Call Laravel API
         run: |
           response=$(curl -s -w "\n%{http_code}" --max-time 60 -X POST "https://laravelwordpressapi.onrender.com/api/transferData" \
-            -H "X-API-Key: ${{ secrets.SCHEDULER_KEY }}")
+            -H "X-API-KEY: ${{ secrets.SCHEDULER_KEY }}")
           
           http_code=$(echo "$response" | tail -n1)
           body=$(echo "$response" | sed '$d')
