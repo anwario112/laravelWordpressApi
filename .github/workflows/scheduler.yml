@@ -1,0 +1,21 @@
+name: Trigger Transfer Data
+
+# Schedule workflow
+on:
+  schedule:
+    # 11:00 AM Lebanon winter (UTC+2)
+    - cron: "0 9 * * *"
+    # 11:00 AM Lebanon summer DST (UTC+3)
+    - cron: "0 8 * * *"
+  workflow_dispatch: # Allows manual trigger from GitHub
+
+jobs:
+  trigger-api:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Laravel transferData API
+        run: |
+          curl -X POST "https://laravelwordpressapi.onrender.com/api/transferData" \
+          -H "X-API-KEY: ${{ secrets.SCHEDULER_KEY }}" \
+          -H "Content-Type: application/json"
