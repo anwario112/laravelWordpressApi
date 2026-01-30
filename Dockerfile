@@ -15,25 +15,34 @@ RUN apt-get update && apt-get install -y \
     unzip \
     libzip-dev \
     libcurl4-openssl-dev \
-    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip curl
+    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip curl \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Copy application files
-COPY . /var/www/html
+# Copy composer files first
+COPY composer.json composer.lock ./
+
+# Install PHP dependencies without scripts and without autoloader
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
+
+# Copy the rest of the application
+COPY . .
+
+# Generate optimized autoloader
+RUN composer dump-autoload --optimize --no-dev
 
 # Create .env file if it doesn't exist
 RUN if [ ! -f .env ]; then cp .env.example .env; fi
 
-# Install PHP dependencies
-RUN composer install --no-dev --optimize-autoloader --no-scripts
-
 # Generate application key
-RUN php artisan key:generate --force
+RUN php artisan key:generate --force || true
 
-# Run Laravel post-install scripts
-RUN php artisan package:discover --ansi
+# Run Laravel optimization
+RUN php artisan config:cache || true && \
+    php artisan route:cache || true && \
+    php artisan view:cache || true
 
 # Set permissions
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
