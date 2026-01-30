@@ -1,40 +1,46 @@
-# 1️⃣ Start from PHP 8.3 CLI with Debian (apt-get available)
-FROM php:8.3-cli-bullseye
+# Use official PHP image with Apache
+FROM php:8.2-apache
 
-# 2️⃣ Install system dependencies
+# Set working directory
+WORKDIR /var/www/html
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    unzip \
     git \
     curl \
-    libzip-dev \
-    libonig-dev \
     libpng-dev \
-    libjpeg-dev \
-    libfreetype6-dev \
+    libonig-dev \
     libxml2-dev \
-    zlib1g-dev \
-    nodejs \
-    npm \
-    && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo_mysql zip gd mbstring bcmath xml ctype tokenizer \
-    && rm -rf /var/lib/apt/lists/*
+    zip \
+    unzip \
+    libzip-dev \
+    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
 
-# 3️⃣ Install Composer
-COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
+# Install Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# 4️⃣ Set working directory
-WORKDIR /app
-COPY . /app
+# Copy application files
+COPY . /var/www/html
 
-# 5️⃣ Install PHP dependencies
-RUN composer install --no-interaction --prefer-dist --optimize-autoloader
+# Install PHP dependencies
+RUN composer install --no-dev --optimize-autoloader
 
-# 6️⃣ Install Node dependencies & build Vite frontend
-RUN npm install
-RUN npm run build
+# Set permissions
+RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 
-# 7️⃣ Expose port
-EXPOSE 10000
+# Enable Apache mod_rewrite
+RUN a2enmod rewrite
 
-# 8️⃣ Start Laravel server
-CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=10000"]
+# Update Apache configuration for Laravel
+RUN sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/000-default.conf && \
+    echo '<Directory /var/www/html/public>\n\
+    Options Indexes FollowSymLinks\n\
+    AllowOverride All\n\
+    Require all granted\n\
+</Directory>' >> /etc/apache2/apache2.conf
+
+# Expose port
+EXPOSE 80
+
+# Start Apache
+CMD ["apache2-foreground"]
