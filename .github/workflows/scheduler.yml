@@ -1,6 +1,6 @@
 FROM php:8.2-fpm
 
-# Install system dependencies
+# Install system dependencies (INCLUDING gnupg2 and unixodbc-dev)
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -28,7 +28,7 @@ RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor
 # Install PHP extensions
 RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
 
-# Install SQLSRV PHP extension
+# Install SQLSRV PHP extensions (if you need PHP to connect to SQL Server)
 RUN pecl install sqlsrv pdo_sqlsrv \
     && docker-php-ext-enable sqlsrv pdo_sqlsrv
 
@@ -41,7 +41,7 @@ WORKDIR /var/www
 # Copy composer files
 COPY composer.json composer.lock* ./
 
-# Install dependencies with verbose output and error handling
+# Install dependencies
 RUN composer install \
     --no-dev \
     --no-scripts \
