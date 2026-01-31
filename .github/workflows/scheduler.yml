@@ -1,6 +1,6 @@
 FROM php:8.2-fpm
 
-# Install system dependencies (INCLUDING gnupg2 and unixodbc-dev)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -16,9 +16,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Microsoft SQL Server drivers (FIXED)
+# Install Microsoft SQL Server drivers (DEBIAN 12 FIXED)
 RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
-    && curl https://packages.microsoft.com/config/debian/12/prod.list | tee /etc/apt/sources.list.d/mssql-release.list \
+    && curl https://packages.microsoft.com/config/debian/12/prod.list > /etc/apt/sources.list.d/mssql-release.list \
     && apt-get update \
     && ACCEPT_EULA=Y apt-get install -y msodbcsql18 mssql-tools18 \
     && apt-get clean \
@@ -28,7 +28,7 @@ RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor
 # Install PHP extensions
 RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
 
-# Install SQLSRV PHP extensions (if you need PHP to connect to SQL Server)
+# Install PHP SQL Server extensions (REMOVE this if you don't need PHP to connect to SQL Server)
 RUN pecl install sqlsrv pdo_sqlsrv \
     && docker-php-ext-enable sqlsrv pdo_sqlsrv
 
@@ -41,7 +41,7 @@ WORKDIR /var/www
 # Copy composer files
 COPY composer.json composer.lock* ./
 
-# Install dependencies
+# Install dependencies with verbose output and error handling
 RUN composer install \
     --no-dev \
     --no-scripts \
