@@ -1,54 +1,54 @@
 FROM php:8.2-fpm
-
-# Install dependencies FIRST (including gnupg/curl)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
+    git \
     curl \
-    gnupg \
-    unixodbc-dev \
     libpng-dev \
     libonig-dev \
     libxml2-dev \
-    libzip-dev \
     zip \
     unzip \
-    git \
     nginx \
+    libzip-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Microsoft ODBC Driver for SQL Server (Debian 13)
-RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/13/prod trixie main" > /etc/apt/sources.list.d/mssql-release.list \
-    && apt-get update \
-    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install PHP extensions including SQL Server
-RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip \
-    && pecl install sqlsrv pdo_sqlsrv \
-    && docker-php-ext-enable sqlsrv pdo_sqlsrv
-
-# Composer
+# Install PHP extensions
+RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
+# Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-
+# Set working directory
 WORKDIR /var/www
-
-# Install PHP dependencies
-COPY composer.json composer.lock ./
-RUN composer install --no-dev --no-scripts --no-interaction --prefer-dist -o --ignore-platform-reqs
-
-# Copy app
+# Copy composer files
+COPY composer.json composer.lock* ./
+# Install dependencies with verbose output and error handling
+RUN composer install \
+    --no-dev \
+    --no-scripts \
+    --no-interaction \
+    --prefer-dist \
+    --optimize-autoloader \
+    --verbose \
+    || composer install \
+    --no-dev \
+    --no-scripts \
+    --no-interaction \
+    --prefer-dist \
+    --ignore-platform-reqs \
+    --verbose
+# Copy application files
 COPY . .
-RUN composer dump-autoload -o
-
-# Nginx config
+# Generate optimized autoload files
+RUN composer dump-autoload --optimize
+# Copy nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
-
-# Start script (inline to avoid file issues)
-RUN echo '#!/bin/sh\nphp-fpm &\nnginx -g "daemon off;"' > /start.sh && chmod +x /start.sh
-
-# Permissions
+# Copy start script
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+# Set permissions
 RUN chown -R www-data:www-data /var/www \
-    && chmod -R 775 /var/www/storage /var/www/bootstrap/cache
-
+    && chmod -R 755 /var/www/storage \
+    && chmod -R 755 /var/www/bootstrap/cache
+# Expose port
 EXPOSE 8080
 CMD ["/start.sh"]
+ this is my docker file and working good add to install sqlserver driver
