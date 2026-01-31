@@ -28,4 +28,13 @@ Route::post('OrderService',[OrderService::class,'OrderDetails']);
 //scheduled job
  Route::post('transferData',[SimpleProducts::class,'transferData']);
 
+Route::get('/test', function () {
+    return response()->json([
+        'status' => 'success',
+        'message' => 'API is working!',
+        'timestamp' => now(),
+        'environment' => config('app.env')
+    ]);
+});
+
 
