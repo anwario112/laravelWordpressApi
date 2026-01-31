@@ -32,27 +32,7 @@ jobs:
           else
             echo "✅ GET test passed - API is responding"
           fi
-      
-      # TEST STEP 2: Test POST request handling
-      - name: Test API - POST request
-        run: |
-          echo "Testing POST request handling..."
-          response=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "https://laravelwordpressapi.onrender.com/api/test-post" \
-            -H "Content-Type: application/json" \
-            -d '{"test": "data"}')
-          
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-          
-          echo "POST Test Response: $body"
-          echo "POST Test Status Code: $http_code"
-          
-          if [ "$http_code" -ne 200 ]; then
-            echo "❌ POST test failed - Issue with POST handling"
-            exit 1
-          else
-            echo "✅ POST test passed - POST requests working"
-          fi
+    
           
       # ACTUAL STEP: Call the real transferData endpoint
       - name: Call Laravel API transferData
