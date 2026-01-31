@@ -14,7 +14,9 @@ class SimpleProducts extends Controller
 
    public function transferData(Request $request)
 {
-    $apiKey = $request->header('X-API-Key');
+    $apiKey = $request->header('x-api-key') ?? 
+              $request->header('X-API-KEY') ?? 
+              $request->header('X-API-Key');
     if (!$apiKey) {
         return response()->json(['error' => 'API key is required'], 401);
     }
