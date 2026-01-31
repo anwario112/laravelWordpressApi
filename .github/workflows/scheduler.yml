@@ -1,5 +1,4 @@
 name: Transfer Data Daily
-
 on:
   schedule:
     - cron: '0 14 * * *'  # 14:00 UTC = 4:00 PM Lebanon (UTC+2)
@@ -14,9 +13,51 @@ jobs:
           echo "Waking up service..."
           curl -s --max-time 60 https://laravelwordpressapi.onrender.com/ || true
           sleep 10
-          
-      - name: Call Laravel API
+      
+      # TEST STEP 1: Test basic API connectivity
+      - name: Test API - GET request
         run: |
+          echo "Testing basic API connectivity..."
+          response=$(curl -s -w "\n%{http_code}" --max-time 30 "https://laravelwordpressapi.onrender.com/api/test")
+          
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          
+          echo "GET Test Response: $body"
+          echo "GET Test Status Code: $http_code"
+          
+          if [ "$http_code" -ne 200 ]; then
+            echo "❌ GET test failed - API may be down or misconfigured"
+            exit 1
+          else
+            echo "✅ GET test passed - API is responding"
+          fi
+      
+      # TEST STEP 2: Test POST request handling
+      - name: Test API - POST request
+        run: |
+          echo "Testing POST request handling..."
+          response=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "https://laravelwordpressapi.onrender.com/api/test-post" \
+            -H "Content-Type: application/json" \
+            -d '{"test": "data"}')
+          
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          
+          echo "POST Test Response: $body"
+          echo "POST Test Status Code: $http_code"
+          
+          if [ "$http_code" -ne 200 ]; then
+            echo "❌ POST test failed - Issue with POST handling"
+            exit 1
+          else
+            echo "✅ POST test passed - POST requests working"
+          fi
+          
+      # ACTUAL STEP: Call the real transferData endpoint
+      - name: Call Laravel API transferData
+        run: |
+          echo "Calling actual transferData endpoint..."
           response=$(curl -s -w "\n%{http_code}" --max-time 60 -X POST "https://laravelwordpressapi.onrender.com/api/transferData" \
             -H "X-API-KEY: ${{ secrets.SCHEDULER_KEY }}")
           
@@ -27,6 +68,8 @@ jobs:
           echo "Status Code: $http_code"
           
           if [ "$http_code" -ne 200 ]; then
-            echo "API call failed with status $http_code"
+            echo "❌ API call failed with status $http_code"
             exit 1
+          else
+            echo "✅ Transfer data successful"
           fi
