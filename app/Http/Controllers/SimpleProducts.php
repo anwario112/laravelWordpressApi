@@ -14,21 +14,60 @@ class SimpleProducts extends Controller
 
    public function transferData(Request $request)
 {
+    try{
     $apiKey = $request->header('x-api-key') ?? 
               $request->header('X-API-KEY') ?? 
               $request->header('X-API-Key');
     if (!$apiKey) {
         return response()->json(['error' => 'API key is required'], 401);
     }
+      Log::info('Attempting to connect to database...');
+        
+        // TEST: Check if we can connect to the default database
+        try {
+            $dbConnection = DB::connection()->getDatabaseName();
+            Log::info('Default DB connected', ['database' => $dbConnection]);
+        } catch (\Exception $e) {
+            Log::error('Cannot connect to default database', [
+                'error' => $e->getMessage(),
+                'driver' => config('database.default')
+            ]);
+            return response()->json([
+                'error' => 'Database connection failed',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+
+        Log::info('Querying Customers table...');
 
     $customer = DB::table('Customers')->where('apikey', $apiKey)->first();
     if (!$customer) {
         return response()->json(['error' => 'Invalid API key'], 401);
     }
+    
+        Log::info('Customer found', ['customer_id' => $customer->CustomerID]);
 
     $connectionDetails = DB::table('ConnectionDetails')->where('customerID', $customer->CustomerID)->first();
     if (!$connectionDetails) {
         return response()->json(['error' => 'No database connection configured for this customer'], 500);
+    }
+    Log::info('Connection details found', [
+            'host' => $connectionDetails->ServerName,
+            'database' => $connectionDetails->DatabaseName
+        ]);
+    } catch (\Exception $e) {
+        Log::error('Transfer data failed', [
+            'error' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString()
+        ]);
+        
+        return response()->json([
+            'error' => 'An error occurred',
+            'message' => $e->getMessage(),
+            'line' => $e->getLine()
+        ], 500);
     }
 
     config([
