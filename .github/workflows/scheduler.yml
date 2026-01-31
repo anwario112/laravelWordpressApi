@@ -1,9 +1,11 @@
 FROM php:8.2-fpm
 
-# Install system dependencies including SQL Server requirements
+# Install system dependencies FIRST (including curl and gnupg)
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    gnupg \
+    unixodbc-dev \
     libpng-dev \
     libonig-dev \
     libxml2-dev \
@@ -11,14 +13,13 @@ RUN apt-get update && apt-get install -y \
     unzip \
     nginx \
     libzip-dev \
-    gnupg \
-    unixodbc-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Microsoft ODBC Driver for SQL Server (Debian 12 - Bookworm)
-RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
-    && curl https://packages.microsoft.com/config/debian/12/prod.list > /etc/apt/sources.list.d/mssql-release.list \
+# Now install Microsoft ODBC Driver for SQL Server
+# Using Debian 12 (Bookworm) which matches php:8.2-fpm
+RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list | tee /etc/apt/sources.list.d/mssql-release.list \
     && apt-get update \
     && ACCEPT_EULA=Y apt-get install -y msodbcsql18 mssql-tools18 \
     && apt-get clean \
@@ -27,13 +28,9 @@ RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
 # Install PHP extensions
 RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
 
-# Install SQL Server PHP extensions via PECL
+# Install SQL Server PHP extensions
 RUN pecl install sqlsrv pdo_sqlsrv \
     && docker-php-ext-enable sqlsrv pdo_sqlsrv
-
-# Configure PHP for SQL Server (optional but recommended for production)
-RUN echo "extension=pdo_sqlsrv.so" >> /usr/local/etc/php/conf.d/sqlsrv.ini \
-    && echo "extension=sqlsrv.so" >> /usr/local/etc/php/conf.d/sqlsrv.ini
 
 # Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -44,7 +41,7 @@ WORKDIR /var/www
 # Copy composer files
 COPY composer.json composer.lock* ./
 
-# Install dependencies with verbose output and error handling
+# Install dependencies
 RUN composer install \
     --no-dev \
     --no-scripts \
