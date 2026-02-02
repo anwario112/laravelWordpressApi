@@ -1,14 +1,38 @@
 name: Transfer Data Daily
 on:
   schedule:
-    - cron: '30 3 * * *'  # 12:00 UTC = 2:00 PM Lebanon (UTC+2)
+    - cron: '30 3 * * *'  # 3:30 UTC = 5:30 AM Lebanon (UTC+2)
   workflow_dispatch:
+
 jobs:
+  test_api:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test API Endpoint
+        run: |
+          echo "Testing API availability..."
+          response=$(curl -s -w "\n%{http_code}" -X GET "https://laravelwordpressapi.onrender.com/api/test")
+          
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          
+          echo "Response: $body"
+          echo "Status Code: $http_code"
+          
+          if [ "$http_code" -ne 200 ]; then
+            echo "Test endpoint failed with status $http_code"
+            exit 1
+          fi
+          
+          echo "✓ API is responding correctly"
+
   call_api:
     runs-on: ubuntu-latest
+    needs: test_api  # This job runs only if test_api succeeds
     steps:
       - name: Call Laravel API
         run: |
+          echo "Calling transferData endpoint..."
           response=$(curl -s -w "\n%{http_code}" -X POST "https://laravelwordpressapi.onrender.com/api/transferData" \
             -H "X-API-KEY: ${{ secrets.SCHEDULER_KEY }}")
           
@@ -21,4 +45,6 @@ jobs:
           if [ "$http_code" -ne 200 ]; then
             echo "API call failed with status $http_code"
             exit 1
-          fi it fails shy
+          fi
+          
+          echo "✓ Data transfer completed successfully"
