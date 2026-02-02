@@ -37,12 +37,24 @@ Route::get('/test', function () {
     ]);
 });
 
-Route::get('/check-sqlsrv', function () {
-    return response()->json([
-        'pdo_sqlsrv' => extension_loaded('pdo_sqlsrv'),
-        'sqlsrv' => extension_loaded('sqlsrv'),
-        'php_extensions' => get_loaded_extensions()
-    ]);
+Route::get('/test-db', function () {
+    try {
+        \DB::connection()->getPdo(); // try connecting
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'SQL Server database connection is working!',
+            'database' => config('database.default'),
+            'timestamp' => now(),
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => 'SQL Server connection failed',
+            'error' => $e->getMessage(),
+            'timestamp' => now(),
+        ], 500);
+    }
 });
 
 
